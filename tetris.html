@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Тетрис в браузере</title>
+  <style>
+    /* Фон страницы */
+    body {
+      background: #111;
+      color: #eee;
+      font-family: sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      gap: 20px;
+      padding: 20px;
+    }
+
+    /* Контейнер игры */
+    #game-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* Поле (canvas) */
+    #game {
+      background: #000;
+      border: 2px solid #555;
+      image-rendering: pixelated;
+    }
+
+    /* Панель справа */
+    #info {
+      min-width: 180px;
+    }
+
+    #info h1 {
+      font-size: 20px;
+      margin-bottom: 10px;
+    }
+
+    #info p {
+      margin: 4px 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game" width="240" height="480"></canvas>
+  </div>
+
+  <div id="info">
+    <h1>Тетрис</h1>
+    <p><strong>Управление:</strong></p>
+    <p>A / ← — влево</p>
+    <p>D / → — вправо</p>
+    <p>S / ↓ — быстрее вниз</p>
+    <p>W / ↑ — поворот</p>
+    <p>Q / Esc — выход (перезапуск)</p>
+    <p id="score">Счёт: 0</p>
+    <p id="lines">Линии: 0</p>
+    <p id="status"></p>
+  </div>
+
+  <script>
+    // Размер поля в клетках
+    const WIDTH = 10;
+    const HEIGHT = 20;
+
+    // Размер одной клетки в пикселях
+    const TILE = 24;
+
+    // Получаем canvas и контекст рисования
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const scoreEl = document.getElementById('score');
+    const linesEl = document.getElementById('lines');
+    const statusEl = document.getElementById('status');
+
+    // Фигуры как в вашей Python‑версии
+    // Каждая фигура — набор вращений, одно вращение — список (x, y)
+    const SHAPES = [
+      // I
+      [
+        [ [0, 1], [1, 1], [2, 1], [3, 1] ],
+        [ [2, 0], [2, 1], [2, 2], [2, 3] ],
+      ],
+      // O
+      [
+        [ [1, 0], [2, 0], [1, 1], [2, 1] ],
+      ],
+      // T
+      [
+        [ [1, 0], [0, 1], [1, 1], [2, 1] ],
+        [ [1, 0], [1, 1], [2, 1], [1, 2] ],
+        [ [0, 1], [1, 1], [2, 1], [1, 2] ],
+        [ [1, 0], [0, 1], [1, 1], [1, 2] ],
+      ],
+      // S
+      [
+        [ [1, 0], [2, 0], [0, 1], [1, 1] ],
+        [ [1, 0], [1, 1], [2, 1], [2, 2] ],
+      ],
+      // Z
+      [
+        [ [0, 0], [1, 0], [1, 1], [2, 1] ],
+        [ [2, 0], [1, 1], [2, 1], [1, 2] ],
+      ],
+      // J
+      [
+        [ [0, 0], [0, 1], [1, 1], [2, 1] ],
+        [ [1, 0], [2, 0], [1, 1], [1, 2] ],
+        [ [0, 1], [1, 1], [2, 1], [2, 2] ],
+        [ [1, 0], [1, 1], [0, 2], [1, 2] ],
+      ],
+      // L
+      [
+        [ [2, 0], [0, 1], [1, 1], [2, 1] ],
+        [ [1, 0], [1, 1], [1, 2], [2, 2] ],
+        [ [0, 1], [1, 1], [2, 1], [0, 2] ],
+        [ [0, 0], [1, 0], [1, 1], [1, 2] ],
+      ],
+    ];
+
+    // Цвета для фигур
+    const COLORS = [
+      '#00f0f0', // I
+      '#f0f000', // O
+      '#a000f0', // T
+      '#00f000', // S
+      '#f00000', // Z
+      '#0000f0', // J
+      '#f0a000', // L
+    ];
+
+    // Создаём пустое поле (HEIGHT строк по WIDTH столбцов)
+    function createBoard() {
+      const board = [];
+      for (let y = 0; y < HEIGHT; y++) {
+        const row = new Array(WIDTH).fill(0);
+        board.push(row);
+      }
+      return board;
+    }
+
+    // Проверяем, можно ли поставить фигуру в указанную позицию
+    function canMove(board, shapeId, rotation, x, y) {
+      const shape = SHAPES[shapeId][rotation];
+      for (const [dx, dy] of shape) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || nx >= WIDTH || ny < 0 || ny >= HEIGHT) {
+          return false;
+        }
+        if (board[ny][nx]) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    // "Приклеиваем" фигуру к полю
+    function lockPiece(board, shapeId, rotation, x, y) {
+      const shape = SHAPES[shapeId][rotation];
+      for (const [dx, dy] of shape) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && nx < WIDTH && ny >= 0 && ny < HEIGHT) {
+          board[ny][nx] = shapeId + 1; // 0 — пусто, 1..7 — фигуры
+        }
+      }
+    }
+
+    // Удаляем заполненные линии и возвращаем, сколько убрали
+    function clearLines(board) {
+      let cleared = 0;
+      for (let y = HEIGHT - 1; y >= 0; y--) {
+        let full = true;
+        for (let x = 0; x < WIDTH; x++) {
+          if (!board[y][x]) {
+            full = false;
+            break;
+          }
+        }
+        if (full) {
+          board.splice(y, 1); // удаляем строку
+          board.unshift(new Array(WIDTH).fill(0)); // добавляем пустую сверху
+          cleared++;
+          y++; // пересмотреть ту же строку, сдвинулись
+        }
+      }
+      return cleared;
+    }
+
+    // Рисуем поле и текущую фигуру
+    function draw(board, shapeId, rotation, x, y, score, lines) {
+      // Чёрный фон
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Копия поля для временного отображения
+      const temp = board.map(row => row.slice());
+
+      if (shapeId !== null) {
+        const shape = SHAPES[shapeId][rotation];
+        for (const [dx, dy] of shape) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < WIDTH && ny >= 0 && ny < HEIGHT) {
+            temp[ny][nx] = shapeId + 1;
+          }
+        }
+      }
+
+      // Рисуем клетки
+      for (let row = 0; row < HEIGHT; row++) {
+        for (let col = 0; col < WIDTH; col++) {
+          const cell = temp[row][col];
+          if (cell) {
+            ctx.fillStyle = COLORS[cell - 1];
+            ctx.fillRect(col * TILE, row * TILE, TILE - 1, TILE - 1);
+          } else {
+            ctx.fillStyle = '#111';
+            ctx.fillRect(col * TILE, row * TILE, TILE - 1, TILE - 1);
+          }
+        }
+      }
+
+      // Обновляем текст счёта
+      scoreEl.textContent = 'Счёт: ' + score;
+      linesEl.textContent = 'Линии: ' + lines;
+    }
+
+    // Состояние игры
+    let board = createBoard();
+    let score = 0;
+    let lines = 0;
+    let fallInterval = 600; // миллисекунды между падениями
+    let lastFall = performance.now();
+    let currentShape = null;
+    let rotation = 0;
+    let posX = 3;
+    let posY = 0;
+    let running = true;
+
+    // Создаём новую фигуру
+    function spawnPiece() {
+      currentShape = Math.floor(Math.random() * SHAPES.length);
+      rotation = 0;
+      posX = 3;
+      posY = 0;
+      if (!canMove(board, currentShape, rotation, posX, posY)) {
+        // Места нет — игра окончена
+        running = false;
+        statusEl.textContent = 'Игра окончена! Нажмите Q или Esc, чтобы перезапустить.';
+      }
+    }
+
+    // Обработка нажатий клавиш
+    window.addEventListener('keydown', (e) => {
+      if (!running) {
+        // Если игра окончена — по Q или Esc запускаем заново
+        if (e.key === 'q' || e.key === 'Q' || e.key === 'Escape') {
+          restartGame();
+        }
+        return;
+      }
+
+      if (!currentShape && currentShape !== 0) return;
+
+      const key = e.key;
+      if (key === 'q' || key === 'Q' || key === 'Escape') {
+        running = false;
+        statusEl.textContent = 'Игра завершена. Нажмите Q или Esc, чтобы начать заново.';
+        return;
+      }
+
+      // Влево
+      if (key === 'a' || key === 'A' || key === 'ArrowLeft') {
+        if (canMove(board, currentShape, rotation, posX - 1, posY)) {
+          posX -= 1;
+        }
+      }
+      // Вправо
+      else if (key === 'd' || key === 'D' || key === 'ArrowRight') {
+        if (canMove(board, currentShape, rotation, posX + 1, posY)) {
+          posX += 1;
+        }
+      }
+      // Вниз (ускорение)
+      else if (key === 's' || key === 'S' || key === 'ArrowDown') {
+        if (canMove(board, currentShape, rotation, posX, posY + 1)) {
+          posY += 1;
+        }
+      }
+      // Поворот
+      else if (key === 'w' || key === 'W' || key === 'ArrowUp') {
+        const newRot = (rotation + 1) % SHAPES[currentShape].length;
+        if (canMove(board, currentShape, newRot, posX, posY)) {
+          rotation = newRot;
+        }
+      }
+    });
+
+    // Перезапуск игры
+    function restartGame() {
+      board = createBoard();
+      score = 0;
+      lines = 0;
+      fallInterval = 600;
+      lastFall = performance.now();
+      running = true;
+      statusEl.textContent = '';
+      spawnPiece();
+      draw(board, currentShape, rotation, posX, posY, score, lines);
+    }
+
+    // Главный цикл игры
+    function gameLoop(timestamp) {
+      if (!currentShape && currentShape !== 0) {
+        spawnPiece();
+      }
+
+      if (running) {
+        // Падение фигуры по таймеру
+        if (timestamp - lastFall >= fallInterval) {
+          lastFall = timestamp;
+          if (canMove(board, currentShape, rotation, posX, posY + 1)) {
+            posY += 1;
+          } else {
+            // Фигура упала — приклеиваем
+            lockPiece(board, currentShape, rotation, posX, posY);
+            const cleared = clearLines(board);
+            if (cleared > 0) {
+              lines += cleared;
+              score += (cleared * cleared) * 100;
+              // Ускоряем игру
+              fallInterval = Math.max(150, fallInterval - 30 * cleared);
+            }
+            // Новая фигура
+            spawnPiece();
+            posY = 0;
+          }
+        }
+
+        // Рисуем
+        draw(board, currentShape, rotation, posX, posY, score, lines);
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Стартуем
+    restartGame();
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
